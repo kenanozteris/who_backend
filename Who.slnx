@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Who.Api/Who.Api.csproj" />
+    <Project Path="src/Who.Application/Who.Application.csproj" />
+    <Project Path="src/Who.Domain/Who.Domain.csproj" />
+    <Project Path="src/Who.Infrastructure/Who.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Who.IntegrationTests/Who.IntegrationTests.csproj" />
+    <Project Path="tests/Who.UnitTests/Who.UnitTests.csproj" />
+  </Folder>
+</Solution>
