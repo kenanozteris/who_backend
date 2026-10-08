@@ -21,7 +21,9 @@ public sealed class FoundationTests(PostgresFixture postgres) : IClassFixture<Po
         using var scope = factory.Services.CreateScope();
         var database = scope.ServiceProvider.GetRequiredService<WhoDbContext>();
         Assert.Equal("Npgsql.EntityFrameworkCore.PostgreSQL", database.Database.ProviderName);
-        Assert.Empty(database.Model.GetEntityTypes());
+        Assert.Contains(database.Model.GetEntityTypes(), entity => entity.ClrType == typeof(Who.Domain.Accounts.UserProfile));
+        Assert.DoesNotContain(database.Model.GetEntityTypes(), entity => entity.ClrType.Name is "Poll" or "Circle" or "Follow");
+        Assert.Contains(await database.Database.GetAppliedMigrationsAsync(), migration => migration.EndsWith("InitialAuthAndUser", StringComparison.Ordinal));
         var connection = database.Database.GetDbConnection();
         await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = "SHOW server_version";
@@ -93,12 +95,14 @@ public sealed class FoundationTests(PostgresFixture postgres) : IClassFixture<Po
     {
         public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
         {
-            next(app);
+            // Test-only failure middleware precedes terminal endpoints and uses the configured exception pipeline.
+            app.UseExceptionHandler();
             app.Use(async (context, continuation) =>
             {
                 if (context.Request.Path == "/api/v1/test-error") throw new InvalidOperationException("synthetic-exception-sentinel");
                 await continuation(context);
             });
+            next(app);
         };
     }
 }

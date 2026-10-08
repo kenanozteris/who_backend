@@ -1,201 +1,250 @@
-# WHO Backend — Foundation Bootstrap V1
+# WHO Backend — Auth Core V1
 
-Separate ASP.NET Core / PostgreSQL modular-monolith foundation. Flutter lives in
-the sibling `who_app` repository and is not changed by this milestone.
-This milestone has health/configuration/EF/OpenAPI infrastructure only: no
-registration, Identity user, JWT, refresh session, email sending or business entities.
+ASP.NET Core / PostgreSQL modular monolith on Foundation checkpoint 32e8d6e.
+Flutter is separate and unchanged. USER email/password registration, verification,
+privacy onboarding, sessions and refresh rotation are implemented. External auth,
+recovery, social/media domains, Flutter integration and production deployment are future work.
 
-## Prerequisites
+## Prerequisites and architecture
 
-- Installed .NET 10 SDK. `global.json` pins the verified **10.0.401** SDK with
-  latest-patch roll-forward within its feature band; prereleases are disabled.
-- Running Docker Desktop / Docker Engine with Docker Compose v2 or newer.
-  Verified locally: macOS 27.0.1 (26A434), arm64, Git 2.54.0, Docker 29.8.2,
-  Compose 5.5.1. No SDK/runtime installation is performed by repo scripts.
-- Available host ports 5432 (PostgreSQL), 1025 (SMTP), 8025 (Mailpit Web),
-  5080 (API). Report conflicts; do not silently move services.
-- **No native PostgreSQL, pgAdmin or system PostgreSQL service is used.**
+Installed SDK **10.0.401** is pinned; all six projects target net10.0.
+Docker must be running. Verified: macOS 27.0.1 (26A434)/arm64, Git 2.54.0,
+Docker client/server 29.8.2, Compose 5.5.1. No native PostgreSQL/pgAdmin or SDK installer.
 
-Scripts find `docker` on PATH, or the already-installed Docker Desktop CLI at
-`/Applications/Docker.app/Contents/Resources/bin/docker` on macOS. This fallback
-does not change shell profiles or install tools. For direct CLI commands on this
-Mac, add its directory to the current terminal only:
-
-```sh
-export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
-```
-
-## Architecture
-
-```text
-Who.slnx
-src/Who.Domain             pure domain; no framework/EF/HTTP packages
-src/Who.Application        references Domain; future use cases
-src/Who.Infrastructure     references Domain + Application; EF Core/Npgsql
-src/Who.Api                references Application + Infrastructure; composition/HTTP
-tests/Who.UnitTests        configuration and project-boundary checks
-tests/Who.IntegrationTests WebApplicationFactory + disposable PostgreSQL 18
-scripts/                  local development helpers
-```
-
-All projects target net10.0 with nullable and implicit usings. There are no
-circular references, mediator/mapping/validation/CQRS/repository frameworks,
-message brokers or event buses. Domain/Application are intentionally minimal.
-Future business API routes follow `/api/v1/...`; health routes are operational
-endpoints outside business API versioning.
-
-## Local environment and services
-
-Run from the repo root:
-
-```sh
-cp .env.example .env
-# Edit .env and set WHO_POSTGRES_PASSWORD to your own local password.
-# For shell-sourcing, quote values containing whitespace/shell metacharacters.
-chmod 600 .env
-scripts/dev-up.sh
-```
-
-An ignored .env with a generated local password may already exist from bootstrap
-verification. Preserve it to keep access to the existing development volume.
-Never put its password in tracked appsettings, scripts, examples or reports.
-
-Equivalent commands with a working docker PATH:
-
-```sh
-docker compose config --quiet
-docker compose up -d --wait --wait-timeout 120
-docker compose ps
-```
-
-`config --quiet` validates without printing resolved passwords. PostgreSQL uses
-`postgres:18-alpine` and pg_isready healthcheck. The named volume
-`who_postgres_data` mounts at `/var/lib/postgresql`, the correct parent path for
-the [official PostgreSQL 18 image](https://hub.docker.com/_/postgres).
-Mailpit uses `axllent/mailpit:v1.31.4` and its readyz healthcheck. No downgrade to
-an older PostgreSQL major is used. All published ports bind to 127.0.0.1.
-
-| Service | Address |
+| Project | Responsibilities / references |
 | --- | --- |
-| PostgreSQL | 127.0.0.1:5432 (inside container: 5432) |
-| Mailpit SMTP | localhost:1025 (development, no authentication/TLS) |
-| Mailpit inbox | http://localhost:8025 |
-| API | http://127.0.0.1:5080 |
+| Who.Domain | Pure WHO models/rules; no EF/ASP.NET/Identity/HTTP |
+| Who.Application | DTOs, IAuthService, IVerificationEmailSender; Domain |
+| Who.Infrastructure | Identity/WHO EF, crypto, transaction orchestration, SMTP; Domain + Application |
+| Who.Api | HTTP, DI, JWT validation/policies, rate limits, health/OpenAPI; Application + Infrastructure |
+| Who.UnitTests | Rules, boundaries, config, crypto and architecture |
+| Who.IntegrationTests | WebApplicationFactory + migrated disposable PostgreSQL 18 |
 
-Mailpit is a dependency only; no real email provider or application email logic.
+## Local setup
 
-## API configuration and startup
+From repo root, preserve any existing .env and development volume:
 
-```sh
+~~~sh
+python3 scripts/dev-secrets.py
+scripts/dev-up.sh
 dotnet restore --locked-mode
-dotnet build --no-restore
-scripts/dev-api.sh
-```
-
-The script exports the ignored .env into its own child process and starts the
-API in Development; ASP.NET does not load .env automatically. Required DB values
-are WHO_POSTGRES_DB, WHO_POSTGRES_USER, WHO_POSTGRES_PASSWORD. Host defaults to
-127.0.0.1 and port to 5432. An externally supplied `ConnectionStrings__Who`
-overrides separate DB fields (used by isolated integration tests/deployments).
-Connection strings are constructed with NpgsqlConnectionStringBuilder, preserving
-password delimiters. Required config is validated at startup, before requests;
-missing/invalid config names are reported without secret values. DB uptime is
-checked by readiness, so DB downtime does not prevent an otherwise configured
-process from serving liveness.
-
-```sh
-curl --fail http://127.0.0.1:5080/health/live
-curl --fail http://127.0.0.1:5080/health/ready
-curl --fail http://127.0.0.1:5080/openapi/v1.json
-curl --fail http://localhost:8025/readyz
-```
-
-- GET /health/live: 200 while the process is running, without a DB check.
-- GET /health/ready: real EF/Npgsql connectivity, 200 when available, 503 on outage.
-- GET /openapi/v1.json: built-in OpenAPI JSON in Development only; no extra UI
-  package, Swagger CDN or auth endpoints. Operational health middleware is not
-  a business API contract; the document can have empty business paths initially.
-- ProblemDetails handles exceptions/status errors. Production 500 responses
-  omit exception details. A small `code` extension is provided; future WHO error
-  and validation catalogs can extend this, but are not implemented now.
-
-See [ASP.NET health checks](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks?view=aspnetcore-10.0),
-[OpenAPI](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/overview?view=aspnetcore-10.0)
-and [ProblemDetails](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling?view=aspnetcore-10.0).
-
-## Tests
-
-```sh
-scripts/test.sh
-```
-
-Equivalent commands on Docker Desktop with a user-only socket:
-
-```sh
-export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
-export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
-dotnet test
-```
-
-On a standard Linux/default Docker socket, ordinary `dotnet test` works. Docker
-must be running. Testcontainers uses a random host port and disposable PostgreSQL
-18 with a runtime-generated password; it has no reference to .env or the Compose
-database/volume. The resource reaper and fixture disposal clean only test-owned
-resources. No SQLite/InMemory EF substitution, reusable shared test database or
-fixed test port. Integration tests check real EF connectivity, empty business
-model, healthy probes, outage/recovery, Development OpenAPI, Production
-ProblemDetails and non-disclosure of exception detail. Unit tests cover required
-configuration, password delimiters and architecture boundaries.
-See [Testcontainers PostgreSQL](https://dotnet.testcontainers.org/modules/postgres/)
-and [WebApplicationFactory guidance](https://dotnet.testcontainers.org/examples/aspnet/).
-
-## EF tools and future migrations
-
-```sh
 dotnet tool restore
 set -a
 source .env
 set +a
-dotnet ef dbcontext info --project src/Who.Infrastructure --startup-project src/Who.Api
-```
-
-WhoDbContext is empty deliberately. No schema/table/empty migration or
-EnsureCreated/Migrate startup side effect is added. The first real migration
-belongs to the next **WHO — Auth Core V1** milestone. When actual entities exist:
-
-```sh
-dotnet ef migrations add InitialAuthCore --project src/Who.Infrastructure \
-  --startup-project src/Who.Api --output-dir Persistence/Migrations
 dotnet ef database update --project src/Who.Infrastructure --startup-project src/Who.Api
-```
+dotnet build --no-restore
+scripts/dev-api.sh
+~~~
 
-These migration commands are documented only; do not create a meaningless empty
-bootstrap migration. EF tooling version 10.0.12 is repo-local.
+dev-secrets.py copies .env.example only if .env is absent, fills missing secrets
+with secure randomness, preserves existing values and chmods .env to 600. It prints
+no secret. Do not rotate an existing volume's DB password, JWT key or pepper by
+replacing .env. JWT key/pepper must be base64 with ≥32 decoded bytes; issuer/audience
+nonempty. DB/auth config fail fast with key names only, no values. External
+ConnectionStrings__Who overrides WHO_POSTGRES_* fields. API does not auto-load .env;
+scripts export it into their child process.
 
-## Shutdown and volume preservation
+Scripts find docker on PATH or /Applications/Docker.app/Contents/Resources/bin/docker.
+For direct CLI commands on this Mac, set PATH in the current terminal only:
 
-Stop the API with Ctrl-C. Stop development services with:
+~~~sh
+export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+docker compose config --quiet
+docker compose up -d --wait --wait-timeout 120
+docker compose ps
+~~~
 
-```sh
-scripts/dev-down.sh
-# equivalent: docker compose down
-```
+| Service | Local address |
+| --- | --- |
+| PostgreSQL postgres:18-alpine | 127.0.0.1:5432 |
+| Mailpit axllent/mailpit:v1.31.4 | SMTP localhost:1025; inbox http://localhost:8025 |
+| API | http://127.0.0.1:5080 |
 
-Normal down removes services/network but **preserves who_postgres_data**. Never
-use down -v/--volumes or delete that volume during normal verification. Keep .env
-along with the volume; changing its password does not update an initialized DB.
-Compose services may remain running after bootstrap verification.
+Report port conflicts; do not silently move services. who_postgres_data mounts
+at /var/lib/postgresql for PG18; pg_isready and Mailpit readyz must be healthy.
+WHO_SMTP_HOST/PORT/FROM defaults:127.0.0.1/1025/WHO? <no-reply@who.local>.
+SMTP has no dev auth/TLS and is development-only; no production provider.
 
-## Secrets and logging
+## Schema and migration
 
-.env, build output, test results and .verification evidence are gitignored.
-No real passwords/connection strings are tracked. Production config comes from
-environment/secret providers; the examples contain no real credentials.
-Use default structured ASP.NET logging. NEVER log passwords, access tokens,
-refresh tokens, email verification codes, reset tokens, private keys or secrets.
-Sensitive EF logging and provider error-detail expansion are disabled. Do not
-dump process environments or resolved Compose config into public logs. Synthetic
-test values are not real secrets. No additional logging framework is used.
+First real migration: **20261007125527_InitialAuthAndUser**. Standard Identity schema,
+UserProfiles, UserPrivacyPreferences, EmailVerificationChallenges, UserSessions,
+SessionRefreshTokens; no social tables. Startup runs no Migrate/EnsureCreated.
 
-Backend decisions are in [WHO_BACKEND_CONTEXT.md](WHO_BACKEND_CONTEXT.md).
-Bootstrap evidence/results are summarized in [VERIFICATION.md](VERIFICATION.md).
+~~~sh
+dotnet ef migrations list --project src/Who.Infrastructure --startup-project src/Who.Api
+dotnet ef database update --project src/Who.Infrastructure --startup-project src/Who.Api
+# Future real model changes only:
+dotnet ef migrations add NameOfRealChange --project src/Who.Infrastructure \
+  --startup-project src/Who.Api --output-dir Persistence/Migrations
+~~~
+
+UserProfile PK/FK UserId equals Identity.Id. RegistrationId is a distinct random
+pending handle, not authorization. Social username is only in UserProfile;
+Identity.UserName is an email. Flutter canonical matching: Unicode-whitespace/BOM
+trim, remove one optional @, nonempty ASCII letters/digits/underscore, lowercase,
+no length cap. Canonical PostgreSQL text has a generated SHA256 bytea key with
+UNIQUE index UX_UserProfiles_NormalizedUsername, avoiding B-tree large-text limits.
+DB check enforces lowercase ASCII canonical equality. NormalizedEmail,
+RegistrationId, active challenge per user, family ID and refresh hash are unique.
+WHO/history FKs RESTRICT physical deletion; Identity internal cascades retained
+behind profile restriction. Deletion/audit semantics remain future design.
+
+DisplayName preserves exact Unicode text; backend max 120 Unicode scalars (Flutter
+has no explicit display-name max). BirthDate is DateOnly/DATE, private. Explicit
+TimeProvider UTC reference day and civil month/day arithmetic; Feb 29 advances on
+March 1 in non-leap years, matching Flutter. Exactly 13 allowed; future dates or
+older than 130 years invalid. No age/age-band/safety-class persisted. UTC timestamptz.
+Password 10–128, spaces allowed, no case/digit/symbol requirement; unmodified
+Identity password hasher.
+
+## HTTP contracts and flow
+
+Paths below are relative to /api/v1. CamelCase DTOs, explicit enum strings,
+no EF entity serialization; unknown request properties rejected.
+
+| Method/path | Authorization | Success |
+| --- | --- | --- |
+| POST /auth/register | anonymous |202 pending|
+| POST /auth/verify-email | registrationId+code |200 onboarding token|
+| POST /auth/resend-verification | registrationId |202 pending|
+| POST /onboarding/privacy | onboarding token only |200 pair + own summary|
+| POST /auth/login | email/password |200 pair; pending states structured409|
+| POST /auth/refresh | opaque refresh in body |200 rotated pair|
+| POST /auth/logout | access + active session |204 current revoked|
+| POST /auth/logout-all | access + active session |204 all revoked|
+| GET /me | access + active session |200 own DTO|
+
+Register example (placeholders are not real credentials):
+
+~~~json
+{"birthDate":"2000-01-01","username":"example_user","displayName":"İpek Öztürk","email":"example@example.test","password":"<10-to-128-character-password>"}
+~~~
+
+Validation order: date parse → age → username/canonical availability → display name
+→ email validation/availability → password → Identity/profile/challenge.
+Under 13 never reaches Identity creation/hash/email. Account/profile/challenge commit
+atomically in one context/transaction, then SMTP outside it. Pending response:
+
+~~~json
+{"registrationId":"<guid>","verificationRequired":true,"expiresInSeconds":600,"resendAvailableInSeconds":60,"emailDeliveryStatus":"sent","code":null}
+~~~
+
+SMTP failure still returns 202, emailDeliveryStatus=failed and
+code=VERIFICATION_DELIVERY_FAILED with resumable registrationId. No rollback,
+network exception/password/code disclosure. Bounded SMTP timeout 5 sec.
+
+Read the six-digit code from Mailpit; no backend debug endpoint. Verify body:
+registrationId and code. Response: emailVerified=true/onboardingRequired=true,
+onboardingToken, expiresIn=900. Email confirmation alone does not activate.
+Resend body: registrationId. Login never auto-sends mail.
+
+Verification uses secure decimal RNG, leading zero supported, scoped HMAC-SHA256
+pepper, no plaintext DB code. Expiry 10 min (exact ExpiresAt expired), cooldown 60 sec,
+max 5 failures; fifth invalidates. Consumed/invalidated cannot reuse. Resend
+invalidates previous active challenge and avoids reissuing historical code values
+in the same pending flow. Profile FOR UPDATE serializes verify/resend; partial
+unique index allows one unconsumed/uninvalidated challenge per user.
+
+Onboarding body is only {"accountVisibility":"public"} or "private".
+Public→Public/Everyone; private→Private/RequestRequired. Both Searchable and
+RecommendationsEnabled true; both profilePollVisibility/socialListVisibility
+everyone, matching Flutter defaults. Privacy is first created at onboarding.
+Privacy + Active/completed profile + first session commit atomically. Replay409,
+no duplicate record/session. Client cannot send arbitrary low-level preferences.
+
+Login body has email/password and optional device (platform≤32, deviceName≤128,
+appVersion≤32). Unknown email/wrong password both401 INVALID_CREDENTIALS; unknown
+email also incurs Identity verification work. Correct unverified→409
+EMAIL_VERIFICATION_REQUIRED with registrationId/maskedEmail/cooldown; verified
+incomplete→409 ONBOARDING_REQUIRED with new onboarding token. No normal sessions
+for either. Suspended/deleted/unavailable blocked.
+
+Normal pair: accessToken, refreshToken, accessTokenExpiresInSeconds=900, user summary.
+BirthDate appears only in authenticated own GET /me, not pair summaries, verification,
+JWTs or logs. No public-user endpoint. Access JWT payload:sub/sid/jti/typ=access;
+onboarding:sub/jti/typ=onboarding, no sid; both standard iss/aud/iat/nbf/exp.
+HS256 strong environment key; issuer/audience/signature/algorithm/lifetime validated,
+zero clock skew. Production signing/key-management/asymmetric strategy needs review.
+
+Opaque URL-safe 256-bit refresh; only SHA256 hash/history stored. Every success marks
+old token used, links replacement, keeps same session/family, slides idle to
+min(now+30days,absolute). Absolute fixed 180 days. Reuse revokes suspicious family only;
+other devices survive. Concurrent refresh has at most one child and loser triggers
+same revocation. Profile→session lock ordering serializes mutations.
+Logout current family; logout-all all. WhoAccess checks mutable account/email/
+onboarding/privacy/session state on each protected request: immediate revocation/
+suspension rejection, not JWT alone. IP/UserAgent bounded metadata, never identity;
+no fixed device limit.
+
+## Rate limits and ProblemDetails
+
+Separate per-source-IP fixed 60 sec windows, queue0:
+
+| Policy / environment override | Permits |
+| --- | --- |
+|register / WHO_AUTH_RATE_REGISTER|5|
+|login / WHO_AUTH_RATE_LOGIN|10|
+|verify / WHO_AUTH_RATE_VERIFY|20|
+|resend / WHO_AUTH_RATE_RESEND|5|
+|refresh / WHO_AUTH_RATE_REFRESH|30|
+
+Overrides1..10000. No proxy headers trusted by default.429 RATE_LIMIT_EXCEEDED with
+conservative Retry-After60; five-attempt/cooldown rules remain DB-authoritative.
+
+| HTTP | Stable codes |
+| --- | --- |
+|400|AGE_NOT_ELIGIBLE, BIRTH_DATE_INVALID, USERNAME_INVALID, DISPLAY_NAME_INVALID, EMAIL_INVALID, PASSWORD_INVALID, VERIFICATION_CODE_INVALID, VERIFICATION_CODE_EXPIRED, PRIVACY_PRESET_INVALID, DEVICE_METADATA_INVALID, REQUEST_INVALID|
+|401|INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN, SESSION_EXPIRED, SESSION_REVOKED, REFRESH_TOKEN_REUSE_DETECTED, UNAUTHORIZED|
+|403|ACCOUNT_SUSPENDED, ACCOUNT_UNAVAILABLE, FORBIDDEN (including token-type/session-state denial)|
+|404|VERIFICATION_UNAVAILABLE / ACCOUNT_UNAVAILABLE for missing handle/account; http_error for unmapped paths|
+|409|USERNAME_UNAVAILABLE, EMAIL_UNAVAILABLE, REGISTRATION_CONFLICT, VERIFICATION_UNAVAILABLE for consumed/inapplicable flow, EMAIL_VERIFICATION_REQUIRED, ONBOARDING_REQUIRED, ONBOARDING_ALREADY_COMPLETED|
+|429|VERIFICATION_ATTEMPTS_EXCEEDED, VERIFICATION_RESEND_TOO_SOON, RATE_LIMIT_EXCEEDED|
+|202|VERIFICATION_DELIVERY_FAILED is a resumable pending-response code|
+|500|unexpected_error; Production never exposes exception detail|
+
+No forgot/reset/password-change endpoint. Recovery UX/token mechanism still
+product-review/future; successful future password reset/change MUST revoke all sessions.
+
+## Verify and shut down
+
+~~~sh
+curl --fail http://127.0.0.1:5080/health/live
+curl --fail http://127.0.0.1:5080/health/ready
+curl --fail http://127.0.0.1:5080/openapi/v1.json
+curl --fail http://localhost:8025/readyz
+scripts/test.sh --no-build
+# API must be running; actual Mailpit full flow, redacted output only:
+python3 scripts/auth-smoke.py
+~~~
+
+Live independent of DB; ready real connectivity200/503. Built-in Development OpenAPI
+includes all9 endpoints/contracts, Production404. Functional tests use controlled
+sender/clock and actual migrations on disposable PG18 with random port; no Compose
+DB/volume or SQLite/InMemory. Functional rate overrides10000; default limiter tested.
+Only changed C# sources are formatted/verified.
+
+Docker Desktop user-only socket: scripts/test.sh supplies necessary variables.
+Equivalent direct command:
+
+~~~sh
+export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+dotnet test --no-build
+~~~
+
+API Ctrl-C; services: scripts/dev-down.sh (docker compose down, keeps named volume).
+Never down -v, volume removal, DB drop or unrelated container wipe. Smoke users may
+remain in dev DB, tests never depend on them. Tooling retains no passwords/codes/tokens.
+
+.env/build outputs/.verification ignored. NEVER track/log DB password, JWT key,
+pepper, password, access/refresh/reset token, code or private key. No sensitive EF/
+provider error detail or HTTP-body logging. Actual runtime log guards and real-smoke
+output scans enforce this; no extra logging framework/provider/cloud deployment.
+
+[Decisions](WHO_BACKEND_CONTEXT.md), [Auth evidence](AUTH_CORE_REPORT.md),
+[historical Foundation report](VERIFICATION.md).
+Primary guidance: [Identity](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/customize-identity-model?view=aspnetcore-10.0),
+[JWT](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/configure-jwt-bearer-authentication?view=aspnetcore-10.0),
+[rate limiting](https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit?view=aspnetcore-10.0).
